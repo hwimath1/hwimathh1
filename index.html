@@ -1,0 +1,833 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>m^3 알아보기</title>
+  <!-- MathJax 라이브러리 (LaTeX 수식 렌더링용) -->
+  <script
+    src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"
+    defer
+  ></script>
+  <style>
+    body {
+      margin: 0; padding: 0; box-sizing: border-box;
+      background: #f9f9f9; font-family: sans-serif;
+    }
+    #container {
+      max-width: 700px; margin: 0 auto; padding: 10px;
+    }
+    h1, h2, h3 {
+      text-align: center;
+    }
+    .hidden {
+      display: none;
+    }
+    .energy-bar {
+      width: 100%; height: 20px; background: #ccc; margin: 10px 0;
+      position: relative; overflow: hidden;
+    }
+    .energy-bar-inner {
+      height: 100%; background: linear-gradient(to right, #6cf, #39c);
+      width: 100%; /* 줄어드는 폭을 JS에서 조절 */
+      transition: width 0.2s linear;
+    }
+    .question-box {
+      background: #fff; border: 1px solid #ccc; border-radius: 6px;
+      padding: 10px; margin-bottom: 10px;
+    }
+    .answer-choice {
+      margin: 5px 0; cursor: pointer;
+      background: #eee; border-radius: 4px; padding: 6px;
+    }
+    .answer-choice:hover {
+      background: #ddd;
+    }
+    .highlight-correct { background: #cfc !important; }
+    .highlight-wrong { background: #fcc !important; }
+    #status-bar {
+      text-align: center; margin: 10px 0;
+    }
+    #response {
+      white-space: pre; background: #fff; border: 1px solid #ddd;
+      padding: 8px; margin-top: 10px; border-radius: 4px;
+      font-size: 0.9rem; color: #333; max-height: 150px; overflow-y: auto;
+    }
+    .btn {
+      display: inline-block; cursor: pointer;
+      background: #39c; color: #fff; border: none; border-radius: 4px;
+      padding: 8px 12px; margin: 5px; font-size: 1rem;
+    }
+    .btn:hover {
+      background: #38a;
+    }
+    /* 난이도 선택용 */
+    .difficulty-btn {
+      background: #666;
+    }
+    .difficulty-btn:hover {
+      background: #444;
+    }
+    .input-field {
+      padding: 8px; margin: 6px 0; width: 70%;
+      border: 1px solid #ccc; border-radius: 4px;
+      font-size: 1rem;
+    }
+    .center {
+      text-align: center;
+    }
+    #elapsed-time {
+      font-weight: bold; color: #c33;
+    }
+  </style>
+</head>
+<body>
+<div id="container">
+
+  <h1>m<sup>3</sup> 알아보기</h1>
+
+  <!-- 첫 화면: 이름 및 난이도 선택 -->
+  <div id="welcome-screen">
+    <h2>이름을 입력하세요</h2>
+    <div class="center">
+      <input type="text" id="playerName" class="input-field" placeholder="이름" />
+      <h3>난이도를 선택하세요</h3>
+      <button class="btn difficulty-btn" onclick="startGame('top')">최상 (20초)</button>
+      <button class="btn difficulty-btn" onclick="startGame('high')">상 (30초)</button>
+      <button class="btn difficulty-btn" onclick="startGame('mid')">중 (40초)</button>
+      <button class="btn difficulty-btn" onclick="startGame('low')">하 (시간제한 없음)</button>
+    </div>
+  </div>
+
+  <!-- 게임 화면 -->
+  <div id="game-screen" class="hidden">
+
+    <div id="status-bar">
+      <div>남은 기회: <span id="lives">3</span></div>
+      <div>현재 점수: <span id="score">0</span></div>
+      <div>전체 경과 시간: <span id="elapsed-time">0</span> 초</div>
+    </div>
+
+    <!-- 에너지바(시간제한 시각화) -->
+    <div class="energy-bar" id="energy-bar">
+      <div class="energy-bar-inner" id="energy-bar-inner"></div>
+    </div>
+
+    <!-- 문제 표시 영역 -->
+    <div id="question-area" class="question-box">
+      <div id="question-text"></div>
+      <div id="choices"></div>
+    </div>
+
+    <!-- 다음 문제 버튼 -->
+    <div class="center">
+      <button id="next-button" class="btn hidden" onclick="goToNextQuestion()">다음 문제</button>
+    </div>
+
+  </div>
+
+  <!-- 게임 종료 화면 -->
+  <div id="end-screen" class="hidden center">
+    <h2>게임 종료</h2>
+    <p>최종 점수: <span id="final-score"></span></p>
+    <button class="btn" onclick="sendScore()">점수 전송</button>
+    <div id="response"></div>
+  </div>
+
+</div>
+
+<script>
+/*
+  "모든 문제를 하나도 빠짐없이" => 총 40문제.
+  8개의 세트(각 5문제)로 구성:
+    1) 부피 비교 (원문제 포함 5문제)
+    2) 민정이 서랍장 difference (원문제 포함 5문제)
+    3) 29000000 cm^3 => ? (원문제 포함 5문제)
+    4) 부피가 큰 것부터 순서대로 (원문제 포함 5문제)
+    5) (다시) 0.9 m^3 비교 세트 (원문제 포함 5문제) - 실상은 1)과 유사하지만 대화 중 별도 요청
+    6) 정육면체 부피 문제 (원문제 포함 5문제)
+    7) 2100000000 cm^3 => ? (원문제 포함 5문제)
+    8) "다음 중 틀린 것은?" 5문제(각각 5지선다)
+*/
+
+// --------------- 문제 데이터 (총 40) ---------------
+
+// (1) 부피 비교 세트 (원문제 + 변형 4)
+//    0.9 m^3 vs 2,500,000 cm^3 = <, 1.2 vs 1,150,000 => >, 2.4 vs 2,400,000 => =, etc.
+const set1_compareVolume = [
+  {
+    question: `
+      <p>부피를 비교하세요:<br/>
+      \\(0.9\\,\\text{m}^3\\) <span style="font-weight:bold;">\\(\\bigcirc\\)</span> \\(2{,}500{,}000\\,\\text{cm}^3\\)
+      <br/>조건: \\(2{,}500{,}000\\,\\text{cm}^3 = 2.5\\,\\text{m}^3\\)
+      </p>`,
+    choices: ["\\(>\\)", "\\(<\\)", "\\(=\\)", "비교 불가"],
+    correct: 1  // "<"
+  },
+  {
+    question: `
+      <p>\\(1.2\\,\\text{m}^3\\) \\(\\bigcirc\\) \\(1{,}150{,}000\\,\\text{cm}^3\\)<br/>
+      조건: \\(1{,}150{,}000\\,\\text{cm}^3 = 1.15\\,\\text{m}^3\\)
+      </p>`,
+    choices: ["\\(>\\)", "\\(<\\)", "\\(=\\)", "비교 불가"],
+    correct: 0  // ">"
+  },
+  {
+    question: `
+      <p>\\(2.4\\,\\text{m}^3\\) \\(\\bigcirc\\) \\(2{,}400{,}000\\,\\text{cm}^3\\)<br/>
+      조건: \\(2{,}400{,}000\\,\\text{cm}^3 = 2.4\\,\\text{m}^3\\)
+      </p>`,
+    choices: ["\\(>\\)", "\\(<\\)", "\\(=\\)", "비교 불가"],
+    correct: 2  // "="
+  },
+  {
+    question: `
+      <p>\\(3\\,\\text{m}^3\\) \\(\\bigcirc\\) \\(3{,}100{,}000\\,\\text{cm}^3\\)<br/>
+      조건: \\(3{,}100{,}000\\,\\text{cm}^3 = 3.1\\,\\text{m}^3\\)
+      </p>`,
+    choices: ["\\(>\\)", "\\(=\\)", "\\(<\\)", "비교 불가"],
+    correct: 2  // "<"
+  },
+  {
+    question: `
+      <p>\\(1.25\\,\\text{m}^3\\) \\(\\bigcirc\\) \\(1{,}350{,}000\\,\\text{cm}^3\\)<br/>
+      조건: \\(1{,}350{,}000\\,\\text{cm}^3 = 1.35\\,\\text{m}^3\\)
+      </p>`,
+    choices: ["\\(>\\)", "\\(=\\)", "\\(<\\)", "비교 불가"],
+    correct: 2  // "<"
+  }
+];
+
+// (2) 민정이 서랍장 difference (원문제 + 변형 4)
+const set2_drawerDiff = [
+  {
+    question: `
+      <p>민정이 방 서랍장: \\(1\\,\\text{m}^3\\), 안방 서랍장: \\(4{,}100{,}000\\,\\text{cm}^3\\).<br/>
+      두 서랍장의 부피 차는 몇 \\(\\text{cm}^3\\)입니까?<br/>
+      조건: \\(1\\,\\text{m}^3 = 1000000\\,\\text{cm}^3\\)
+      </p>`,
+    choices: ["3100000", "2100000", "4100000", "1100000"],
+    correct: 0  // 3100000
+  },
+  {
+    question: `
+      <p>현아가 거실에 둔 책장: \\(1.5\\,\\text{m}^3\\),<br/>
+      안방 책장: \\(2{,}500{,}000\\,\\text{cm}^3\\).<br/>
+      두 책장의 부피 차(\\text{cm}^3)는?<br/>
+      조건: \\(1.5\\,\\text{m}^3 = 1500000\\,\\text{cm}^3\\)
+      </p>`,
+    choices: ["600000", "1000000", "400000", "2500000"],
+    correct: 1  // 1000000
+  },
+  {
+    question: `
+      <p>영수가 쓰는 냉장고 둘의 부피 차를 구하시오.<br/>
+      주방 냉장고: \\(2\\,\\text{m}^3 = 2000000\\,\\text{cm}^3\\),<br/>
+      다용도실 냉장고: \\(3{,}500{,}000\\,\\text{cm}^3\\).<br/>
+      차이는 몇 \\(\\text{cm}^3\\)?
+      </p>`,
+    choices: ["1000000", "1500000", "3500000", "2000000"],
+    correct: 1  // 1500000
+  },
+  {
+    question: `
+      <p>민호가 거실에 둔 쇼파: \\(1.2\\,\\text{m}^3 = 1200000\\,\\text{cm}^3\\),<br/>
+      작은 방 쇼파: \\(300000\\,\\text{cm}^3\\).<br/>
+      두 쇼파의 부피 차는 몇 \\(\\text{cm}^3\\)?
+      </p>`,
+    choices: ["900000", "300000", "1500000", "1200000"],
+    correct: 0  // 900000
+  },
+  {
+    question: `
+      <p>선미가 공부방에 둔 테이블: \\(3.2\\,\\text{m}^3 = 3200000\\,\\text{cm}^3\\),<br/>
+      거실 테이블: \\(1{,}500{,}000\\,\\text{cm}^3\\).<br/>
+      두 테이블의 부피 차는 몇 \\(\\text{cm}^3\\)?
+      </p>`,
+    choices: ["1700000", "1200000", "2200000", "2000000"],
+    correct: 0  // 1700000
+  }
+];
+
+// (3) "29000000 cm^3 => ???" 세트 (원문제 + 변형 4)
+const set3_29calc = [
+  {
+    question: `
+      <p>\\(29000000\\,\\text{cm}^3\\)는 몇 \\(\\text{m}^3\\)인지 구하시오.<br/>
+      조건: \\(1\\,\\text{m}^3 = 1000000\\,\\text{cm}^3\\)
+      </p>`,
+    choices: ["2.9", "29", "290", "0.29"],
+    correct: 1  // 29
+  },
+  {
+    question: `
+      <p>\\(14000000\\,\\text{cm}^3\\)를 \\(\\text{m}^3\\)로 바꾸면 얼마인가?<br/>
+      조건: \\(1\\,\\text{m}^3 = 1000000\\,\\text{cm}^3\\)
+      </p>`,
+    choices: ["14", "1.4", "140", "0.014"],
+    correct: 0  // 14
+  },
+  {
+    question: `
+      <p>\\(50000000\\,\\text{cm}^3\\)를 \\(\\text{m}^3\\)로 바꾸세요.<br/>
+      조건: \\(1\\,\\text{m}^3 = 1000000\\,\\text{cm}^3\\)
+      </p>`,
+    choices: ["5", "50", "500", "0.5"],
+    correct: 1  // 50
+  },
+  {
+    question: `
+      <p>\\(32000000\\,\\text{cm}^3\\)는 몇 \\(\\text{m}^3\\)?<br/>
+      조건: \\(1\\,\\text{m}^3 = 1000000\\,\\text{cm}^3\\)
+      </p>`,
+    choices: ["32", "3.2", "320", "1.6"],
+    correct: 0  // 32
+  },
+  {
+    question: `
+      <p>\\(2000000\\,\\text{cm}^3\\)는 몇 \\(\\text{m}^3\\)인가?<br/>
+      조건: \\(1\\,\\text{m}^3 = 1000000\\,\\text{cm}^3\\)
+      </p>`,
+    choices: ["0.2", "20", "2", "200"],
+    correct: 2  // 2
+  }
+];
+
+// (4) 부피가 큰 것부터 순서대로 나열 (원문제 + 변형 4)
+//   각 문제는 "어느 순서가 맞는가?" 식으로 4지 선다
+const set4_ordering = [
+  {
+    question: `
+      <p>다음을 부피가 큰 것부터 순서대로 나열한 것은?<br/>
+      (ㄱ) \\(4.8\\,\\text{m}^3 = 4800000\\,\\text{cm}^3\\)<br/>
+      (ㄴ) \\(13000000\\,\\text{cm}^3\\)<br/>
+      (ㄷ) 한 모서리가 300cm인 정육면체(\\(300\\times300\\times300=27000000\\,\\text{cm}^3\\))<br/>
+      (ㄹ) 가로70cm, 세로60cm, 높이500cm 직육면체(\\(2100000\\,\\text{cm}^3\\))
+      </p>
+      <p>순서: (ㄷ)(2700만) &gt; (ㄴ)(1300만) &gt; (ㄱ)(480만) &gt; (ㄹ)(210만)</p>`,
+    choices: [
+      "(ㄴ)→(ㄷ)→(ㄱ)→(ㄹ)", 
+      "(ㄷ)→(ㄴ)→(ㄱ)→(ㄹ)", 
+      "(ㄷ)→(ㄱ)→(ㄴ)→(ㄹ)", 
+      "(ㄱ)→(ㄷ)→(ㄴ)→(ㄹ)"
+    ],
+    correct: 1
+  },
+  {
+    question: `
+      <p>부피 큰 순서로 나열?<br/>
+      (ㄱ) \\(3.6\\,\\text{m}^3=3600000\\,\\text{cm}^3\\)<br/>
+      (ㄴ) \\(5000000\\,\\text{cm}^3\\)<br/>
+      (ㄷ) 한 모서리 200cm 정육면체(\\(8000000\\,\\text{cm}^3\\))<br/>
+      (ㄹ) 가로100cm, 세로50cm, 높이300cm(\\(1500000\\,\\text{cm}^3\\))
+      </p>
+      <p>순서: (ㄷ)(800만)&gt;(ㄴ)(500만)&gt;(ㄱ)(360만)&gt;(ㄹ)(150만)</p>`,
+    choices: [
+      "(ㄷ)→(ㄴ)→(ㄱ)→(ㄹ)",
+      "(ㄱ)→(ㄷ)→(ㄴ)→(ㄹ)",
+      "(ㄴ)→(ㄷ)→(ㄱ)→(ㄹ)",
+      "(ㄷ)→(ㄱ)→(ㄹ)→(ㄴ)"
+    ],
+    correct: 0
+  },
+  {
+    question: `
+      <p>다음 네 부피를 큰 것부터 차례로:<br/>
+      (ㄱ) \\(2.5\\,\\text{m}^3=2500000\\,\\text{cm}^3\\)<br/>
+      (ㄴ) \\(4500000\\,\\text{cm}^3\\)<br/>
+      (ㄷ) 한 모서리 150cm 정육면체(\\(3375000\\,\\text{cm}^3\\))<br/>
+      (ㄹ) 200cm×100cm×100cm(\\(2000000\\,\\text{cm}^3\\))
+      </p>
+      <p>순서: (ㄴ)(450만)&gt;(ㄷ)(337.5만)&gt;(ㄱ)(250만)&gt;(ㄹ)(200만)</p>`,
+    choices: [
+      "(ㄴ)→(ㄷ)→(ㄱ)→(ㄹ)",
+      "(ㄷ)→(ㄴ)→(ㄱ)→(ㄹ)",
+      "(ㄴ)→(ㄷ)→(ㄹ)→(ㄱ)",
+      "(ㄱ)→(ㄴ)→(ㄷ)→(ㄹ)"
+    ],
+    correct: 0
+  },
+  {
+    question: `
+      <p>다음 중 부피가 큰 것부터 차례대로 나열?<br/>
+      (ㄱ) \\(1.2\\,\\text{m}^3=1200000\\,\\text{cm}^3\\)<br/>
+      (ㄴ) \\(2000000\\,\\text{cm}^3\\)<br/>
+      (ㄷ) 100cm 정육면체(\\(100\\times100\\times100=1000000\\,\\text{cm}^3\\))<br/>
+      (ㄹ) 120cm×80cm×50cm(\\(480000\\,\\text{cm}^3\\))
+      </p>
+      <p>순서: (ㄴ)(200만)&gt;(ㄱ)(120만)&gt;(ㄷ)(100만)&gt;(ㄹ)(48만)</p>`,
+    choices: [
+      "(ㄱ)→(ㄴ)→(ㄷ)→(ㄹ)",
+      "(ㄴ)→(ㄱ)→(ㄷ)→(ㄹ)",
+      "(ㄷ)→(ㄹ)→(ㄴ)→(ㄱ)",
+      "(ㄴ)→(ㄷ)→(ㄱ)→(ㄹ)"
+    ],
+    correct: 1
+  },
+  {
+    question: `
+      <p>부피 큰 순서로 나열?<br/>
+      (ㄱ) \\(7\\,\\text{m}^3=7000000\\,\\text{cm}^3\\)<br/>
+      (ㄴ) \\(3500000\\,\\text{cm}^3\\)<br/>
+      (ㄷ) 200cm 정육면체(\\(8000000\\,\\text{cm}^3\\))<br/>
+      (ㄹ) 50cm×50cm×200cm(\\(500000\\,\\text{cm}^3\\))
+      </p>
+      <p>순서: (ㄷ)(800만)&gt;(ㄱ)(700만)&gt;(ㄴ)(350만)&gt;(ㄹ)(50만)</p>`,
+    choices: [
+      "(ㄷ)→(ㄱ)→(ㄴ)→(ㄹ)",
+      "(ㄱ)→(ㄷ)→(ㄹ)→(ㄴ)",
+      "(ㄱ)→(ㄴ)→(ㄷ)→(ㄹ)",
+      "(ㄴ)→(ㄱ)→(ㄹ)→(ㄷ)"
+    ],
+    correct: 0
+  }
+];
+
+// (5) 다시 "0.9 m^3 => ???" 비교 세트 (원문제 + 변형 4)
+//    사실상 (1)과 유사하지만 대화에서 별도 요청이 있었으므로 별도 세트로 처리
+const set5_compareVolume2 = [
+  {
+    question: `
+      <p>(원문제) \\(0.9\\,\\text{m}^3\\) vs \\(2{,}500{,}000\\,\\text{cm}^3\\).<br/>
+      조건: \\(2{,}500{,}000\\,\\text{cm}^3 = 2.5\\,\\text{m}^3\\).<br/>
+      어느 부등호가 알맞을까요?</p>`,
+    choices: ["\\(>\\)", "\\(<\\)", "\\(=\\)", "비교 불가"],
+    correct: 1
+  },
+  {
+    question: `
+      <p>\\(3{,}500{,}000\\,\\text{cm}^3\\) vs \\(3.2\\,\\text{m}^3\\).<br/>
+      조건: \\(3{,}500{,}000\\,\\text{cm}^3 = 3.5\\,\\text{m}^3\\).<br/>
+      어느 부등호가 알맞을까요?</p>`,
+    choices: ["\\(>\\)", "\\(<\\)", "\\(=\\)", "비교 불가"],
+    correct: 0 // 3.5 m^3 > 3.2 m^3
+  },
+  {
+    question: `
+      <p>\\(7{,}200{,}000\\,\\text{cm}^3\\) vs \\(7.2\\,\\text{m}^3\\).<br/>
+      조건: \\(7{,}200{,}000\\,\\text{cm}^3 = 7.2\\,\\text{m}^3\\).<br/>
+      어느 부등호?</p>`,
+    choices: ["\\(>\\)", "\\(<\\)", "\\(=\\)", "비교 불가"],
+    correct: 2 // =
+  },
+  {
+    question: `
+      <p>\\(1{,}200{,}000\\,\\text{cm}^3\\) vs \\(1.1\\,\\text{m}^3\\).<br/>
+      조건: \\(1{,}200{,}000\\,\\text{cm}^3 = 1.2\\,\\text{m}^3\\).<br/>
+      부등호?</p>`,
+    choices: ["\\(>\\)", "\\(<\\)", "\\(=\\)", "비교 불가"],
+    correct: 0 // 1.2 m^3 > 1.1 m^3
+  },
+  {
+    question: `
+      <p>\\(2{,}450{,}000\\,\\text{cm}^3\\) vs \\(2.5\\,\\text{m}^3\\).<br/>
+      조건: \\(2{,}450{,}000\\,\\text{cm}^3 = 2.45\\,\\text{m}^3\\).<br/>
+      부등호?</p>`,
+    choices: ["\\(>\\)", "\\(<\\)", "\\(=\\)", "비교 불가"],
+    correct: 1 // 2.45 < 2.5
+  }
+];
+
+// (6) 정육면체 부피 문제 (원문제 + 변형 4)
+const set6_cubeVolume = [
+  {
+    question: `
+      <p>(원문제) 한 모서리 길이 2m인 정육면체가 있습니다.
+      이 정육면체의 부피는 몇 \\(\\text{m}^3\\)입니까?
+      <br/>조건: 부피 = (모서리)^3
+      </p>`,
+    choices: ["8", "4", "6", "12"],
+    correct: 0
+  },
+  {
+    question: `
+      <p>모서리 길이 3m인 정육면체 부피는 몇 \\(\\text{m}^3\\)?
+      <br/>조건: 부피 = (3)(3)(3)
+      </p>`,
+    choices: ["9", "27", "18", "30"],
+    correct: 1
+  },
+  {
+    question: `
+      <p>가로,세로,높이 모두 4.5m인 정육면체 부피는?
+      <br/>\\(4.5 \\times 4.5 \\times 4.5\\)
+      </p>`,
+    choices: ["60.75", "81", "91.125", "100.5"],
+    correct: 2
+  },
+  {
+    question: `
+      <p>모서리가 1.2m인 정육면체 부피?
+      <br/>\\(1.2\\times1.2\\times1.2\\)
+      </p>`,
+    choices: ["1.728", "1.44", "2.20", "2.80"],
+    correct: 0
+  },
+  {
+    question: `
+      <p>모서리가 6m인 정육면체 부피?
+      <br/>\\(6\\times6\\times6\\)
+      </p>`,
+    choices: ["126", "216", "196", "72"],
+    correct: 1
+  }
+];
+
+// (7) "2100000000 cm^3 => ???" 세트 (원문제 + 변형 4)
+//    총 5문제: 2100000000->2100, 3150000000->3150, 5000000->5, etc.
+const set7_2_1G = [
+  {
+    question: `
+      <p>\\(2100000000\\,\\text{cm}^3\\)를 \\(\\text{m}^3\\)로.
+      <br/>조건: \\(1\\,\\text{m}^3=1000000\\,\\text{cm}^3\\)
+      </p>`,
+    choices: ["2100", "210", "21000", "210000"],
+    correct: 0
+  },
+  {
+    question: `
+      <p>\\(3150000000\\,\\text{cm}^3\\)를 \\(\\text{m}^3\\)로 환산.
+      <br/>조건: \\(1\\,\\text{m}^3=1000000\\,\\text{cm}^3\\)
+      </p>`,
+    choices: ["315", "3150", "31500", "3.15"],
+    correct: 1
+  },
+  {
+    question: `
+      <p>\\(5000000\\,\\text{cm}^3\\)는 몇 \\(\\text{m}^3\\)?
+      <br/>조건: \\(1\\,\\text{m}^3=1000000\\,\\text{cm}^3\\)
+      </p>`,
+    choices: ["0.5", "50", "5", "500"],
+    correct: 2
+  },
+  {
+    question: `
+      <p>\\(880000000\\,\\text{cm}^3\\)를 \\(\\text{m}^3\\)로 바꾸면?
+      <br/>조건: \\(1\\,\\text{m}^3=1000000\\,\\text{cm}^3\\)
+      </p>`,
+    choices: ["8.8", "880", "88", "8800"],
+    correct: 1
+  },
+  {
+    question: `
+      <p>\\(1500000\\,\\text{cm}^3\\)는 몇 \\(\\text{m}^3\\)?
+      <br/>조건: \\(1\\,\\text{m}^3=1000000\\,\\text{cm}^3\\)
+      </p>`,
+    choices: ["0.15", "1.5", "15", "150"],
+    correct: 1
+  }
+];
+
+// (8) "다음 중 틀린 것은?" 5문제 (각 문제마다 5지 선다)
+const set8_wrongOne = [
+  {
+    // 문제1
+    question: `
+      <p>다음 중 틀린 환산식을 고르시오.<br/>
+      조건: \\(1\\,\\text{m}^3=1000000\\,\\text{cm}^3\\)<br/>
+      ① \\(3\\,\\text{m}^3=3000000\\,\\text{cm}^3\\)<br/>
+      ② \\(9000000\\,\\text{cm}^3=9\\,\\text{m}^3\\)<br/>
+      ③ \\(15000\\,\\text{cm}^3=0.015\\,\\text{m}^3\\)<br/>
+      ④ \\(7.1\\,\\text{m}^3=7100000\\,\\text{cm}^3\\)<br/>
+      ⑤ \\(540000\\,\\text{cm}^3=0.54\\,\\text{m}^3\\)
+      </p>`,
+    choices: ["①", "②", "③", "④", "⑤"],
+    correct: 0 // ①
+  },
+  {
+    // 문제2
+    question: `
+      <p>다음 중 틀린 환산식을 고르시오.<br/>
+      조건: \\(1\\,\\text{m}^3=1000000\\,\\text{cm}^3\\)<br/>
+      ① \\(5\\,\\text{m}^3=5000000\\,\\text{cm}^3\\)<br/>
+      ② \\(1200000\\,\\text{cm}^3=1.2\\,\\text{m}^3\\)<br/>
+      ③ \\(60000\\,\\text{cm}^3=0.06\\,\\text{m}^3\\)<br/>
+      ④ \\(8\\,\\text{m}^3=8000000\\,\\text{cm}^3\\)<br/>
+      ⑤ \\(2.5\\,\\text{m}^3=2050000\\,\\text{cm}^3\\)
+      </p>`,
+    choices: ["①", "②", "③", "④", "⑤"],
+    correct: 4 // ⑤
+  },
+  {
+    // 문제3
+    question: `
+      <p>다음 중 틀린 환산식을 고르시오.<br/>
+      조건: \\(1\\,\\text{m}^3=1000000\\,\\text{cm}^3\\)<br/>
+      ① \\(2\\,\\text{m}^3=2000000\\,\\text{cm}^3\\)<br/>
+      ② \\(75000\\,\\text{cm}^3=0.075\\,\\text{m}^3\\)<br/>
+      ③ \\(9100000\\,\\text{cm}^3=9.1\\,\\text{m}^3\\)<br/>
+      ④ \\(1.23\\,\\text{m}^3=1230000\\,\\text{cm}^3\\)<br/>
+      ⑤ \\(500000\\,\\text{cm}^3=0.005\\,\\text{m}^3\\)
+      </p>`,
+    choices: ["①", "②", "③", "④", "⑤"],
+    correct: 4 // ⑤
+  },
+  {
+    // 문제4
+    question: `
+      <p>다음 중 틀린 환산식을 고르시오.<br/>
+      조건: \\(1\\,\\text{m}^3=1000000\\,\\text{cm}^3\\)<br/>
+      ① \\(4.2\\,\\text{m}^3=4200000\\,\\text{cm}^3\\)<br/>
+      ② \\(120000\\,\\text{cm}^3=1.2\\,\\text{m}^3\\)<br/>
+      ③ \\(1.5\\,\\text{m}^3=1500000\\,\\text{cm}^3\\)<br/>
+      ④ \\(2.7\\,\\text{m}^3=2700000\\,\\text{cm}^3\\)<br/>
+      ⑤ \\(800000\\,\\text{cm}^3=0.8\\,\\text{m}^3\\)
+      </p>`,
+    choices: ["①", "②", "③", "④", "⑤"],
+    correct: 1 // ② 틀림
+  },
+  {
+    // 문제5
+    question: `
+      <p>다음 중 틀린 환산식을 고르시오.<br/>
+      조건: \\(1\\,\\text{m}^3=1000000\\,\\text{cm}^3\\)<br/>
+      ① \\(10000\\,\\text{cm}^3=0.01\\,\\text{m}^3\\)<br/>
+      ② \\(50000\\,\\text{cm}^3=0.05\\,\\text{m}^3\\)<br/>
+      ③ \\(420000\\,\\text{cm}^3=0.42\\,\\text{m}^3\\)<br/>
+      ④ \\(3.6\\,\\text{m}^3=3600000\\,\\text{cm}^3\\)<br/>
+      ⑤ \\(9.99\\,\\text{m}^3=999000\\,\\text{cm}^3\\)
+      </p>`,
+    choices: ["①", "②", "③", "④", "⑤"],
+    correct: 4 // ⑤
+  }
+];
+
+// ★ 40문제: 8세트 × 5문제씩 = 40
+//   하나의 배열에 모두 담고, 이후 shuffle.
+
+const allQuestions = [
+  // set1: 부피 비교 (5문제)
+  ...set1_compareVolume,
+  // set2: 서랍장 difference (5문제)
+  ...set2_drawerDiff,
+  // set3: 29000000 cm^3 (5문제)
+  ...set3_29calc,
+  // set4: 부피 큰 것부터 나열 (5문제)
+  ...set4_ordering,
+  // set5: 0.9 m^3 비교 (5문제)
+  ...set5_compareVolume2,
+  // set6: 정육면체 (5문제)
+  ...set6_cubeVolume,
+  // set7: 2100000000 cm^3 (5문제)
+  ...set7_2_1G,
+  // set8: "다음 중 틀린 것은?" (5문제)
+  ...set8_wrongOne
+];
+
+/* -------------------------------------------------------------------
+   아래는 퀴즈 진행 로직 
+------------------------------------------------------------------- */
+
+function shuffleArray(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const r = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[r]] = [arr[r], arr[i]];
+  }
+}
+
+let currentQuestionIndex = 0;
+let questionsOrder = [];
+let lives = 3;
+let score = 0;
+let startTime = 0;
+let elapsedTimer = null;
+let totalElapsedSec = 0;
+let questionTimer = null;
+let timeLimit = 0;
+let isTimeLimit = true;
+let energyBarWidth = 100;
+let playerName = "";
+let pointPerQuestion = 10; // 난이도 기본점수(하)
+
+const difficultyInfo = {
+  top:  { limit: 20, point: 20 },
+  high: { limit: 30, point: 15 },
+  mid:  { limit: 40, point: 13 },
+  low:  { limit: 9999, point: 10 } // 무제한
+};
+
+function startGame(diff) {
+  playerName = document.getElementById('playerName').value.trim();
+  if(!playerName){
+    alert("이름을 입력해주세요!");
+    return;
+  }
+  document.getElementById('welcome-screen').classList.add('hidden');
+  document.getElementById('game-screen').classList.remove('hidden');
+
+  timeLimit = difficultyInfo[diff].limit;
+  isTimeLimit = (diff !== "low");
+  pointPerQuestion = difficultyInfo[diff].point;
+
+  // 문제 순서 섞기 (40문제)
+  questionsOrder = Array.from({length: allQuestions.length}, (_, i) => i);
+  shuffleArray(questionsOrder);
+
+  lives = 3;
+  score = 0;
+  document.getElementById('lives').textContent = lives;
+  document.getElementById('score').textContent = score;
+
+  // 전체 경과 시간 카운트 시작
+  startTime = Date.now();
+  if(elapsedTimer) clearInterval(elapsedTimer);
+  elapsedTimer = setInterval(() => {
+    const now = Date.now();
+    totalElapsedSec = Math.floor((now - startTime) / 1000);
+    document.getElementById('elapsed-time').textContent = totalElapsedSec;
+  }, 500);
+
+  currentQuestionIndex = 0;
+  showQuestion();
+}
+
+function showQuestion() {
+  if(currentQuestionIndex >= questionsOrder.length){
+    endGame();
+    return;
+  }
+  // 에너지바 초기화
+  energyBarWidth = 100;
+  document.getElementById('energy-bar-inner').style.width = "100%";
+
+  const qIndex = questionsOrder[currentQuestionIndex];
+  const problem = allQuestions[qIndex];
+
+  document.getElementById('question-text').innerHTML = problem.question || "";
+  
+  const choicesDiv = document.getElementById('choices');
+  choicesDiv.innerHTML = "";
+
+  // 보기 배열(인덱스) 만들어 섞어서 랜덤 표시
+  let cArr = Array.from({length: problem.choices.length}, (_,i)=>i);
+  shuffleArray(cArr);
+
+  cArr.forEach(choiceIdx => {
+    const d = document.createElement('div');
+    d.className = "answer-choice";
+    d.innerHTML = problem.choices[choiceIdx]; 
+    d.onclick = () => checkAnswer(choiceIdx, problem);
+    choicesDiv.appendChild(d);
+  });
+
+  // MathJax 렌더링
+  setTimeout(()=>{ MathJax.typeset(); }, 50);
+
+  // 문제당 제한시간 타이머
+  if(questionTimer) clearInterval(questionTimer);
+  if(isTimeLimit) {
+    let remain = timeLimit;
+    questionTimer = setInterval(() => {
+      remain -= 0.2;
+      if(remain <= 0) {
+        clearInterval(questionTimer);
+        // 시간초과 -> 기회-1
+        lives--;
+        document.getElementById('lives').textContent = lives;
+        if(lives <= 0) {
+          endGame();
+          return;
+        }
+        alert("시간 초과! (기회 1 감소)");
+        goToNextQuestion();
+      } else {
+        energyBarWidth = (remain / timeLimit) * 100;
+        document.getElementById('energy-bar-inner').style.width = energyBarWidth + "%";
+      }
+    }, 200);
+  } else {
+    // 하(무제한)
+    document.getElementById('energy-bar-inner').style.width = "100%";
+  }
+
+  document.getElementById('next-button').classList.add('hidden');
+}
+
+function checkAnswer(chosenIndex, problem) {
+  if(questionTimer) clearInterval(questionTimer);
+
+  const correctIdx = problem.correct;  
+  const choicesDiv = document.getElementById('choices');
+  const choiceDivs = choicesDiv.getElementsByClassName('answer-choice');
+
+  for(let i=0; i<choiceDivs.length; i++){
+    if(i === chosenIndex) {
+      // 사용자가 클릭한 보기
+      if(i === correctIdx) {
+        choiceDivs[i].classList.add('highlight-correct');
+        // 맞음 -> 점수+
+        score += pointPerQuestion;
+        document.getElementById('score').textContent = score;
+      } else {
+        choiceDivs[i].classList.add('highlight-wrong');
+        // 틀림 -> 기회-1
+        lives--;
+        document.getElementById('lives').textContent = lives;
+      }
+    }
+    // 정답 하이라이트
+    if(i === correctIdx) {
+      choiceDivs[i].classList.add('highlight-correct');
+    }
+  }
+
+  if(lives <= 0) {
+    endGame();
+    return;
+  }
+
+  document.getElementById('next-button').classList.remove('hidden');
+}
+
+function goToNextQuestion() {
+  currentQuestionIndex++;
+  showQuestion();
+}
+
+function endGame() {
+  if(elapsedTimer) clearInterval(elapsedTimer);
+  if(questionTimer) clearInterval(questionTimer);
+  document.getElementById('game-screen').classList.add('hidden');
+  document.getElementById('end-screen').classList.remove('hidden');
+  document.getElementById('final-score').textContent = score;
+}
+
+// 점수 전송
+function sendScore() {
+  saveData("m^3 알아보기", playerName, score, totalElapsedSec);
+}
+
+// 문제에서 주어진 서버전송 코드
+async function saveData(game, name, score, elapsedTime) {
+  const FUNCTION_URL = "https://us-central1-record-f420d.cloudfunctions.net/report";
+
+  const requestData = {
+    game,
+    name,
+    score: parseInt(score, 10),
+    elapsedTime: parseInt(elapsedTime, 10)
+  };
+
+  try {
+    const response = await fetch(FUNCTION_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(requestData)
+    });
+    const responseData = await response.json();
+
+    if (response.ok) {
+      document.getElementById('response').innerText =
+        `성공: ${JSON.stringify(responseData, null, 2)}`;
+    } else {
+      document.getElementById('response').innerText =
+        `오류: ${JSON.stringify(responseData, null, 2)}`;
+    }
+  } catch (error) {
+    console.error('요청 실패:', error);
+    document.getElementById('response').innerText =
+      `네트워크 오류: ${error.message}`;
+  }
+}
+</script>
+</body>
+</html>
